@@ -1,6 +1,6 @@
 import gzip
 import pickle
-
+import logging
 import numpy as np
 import openai
 
@@ -15,7 +15,8 @@ from hyperdb.galaxy_brain_math_shit import (
 
 MAX_BATCH_SIZE = 2048  # OpenAI batch endpoint max size https://github.com/openai/openai-python/blob/main/openai/embeddings_utils.py#L43
 
-
+# Set up logging
+logging.basicConfig(level=logging.INFO)
 def get_embedding(documents, key=None, model="text-embedding-ada-002"):
     """Default embedding function that uses OpenAI Embeddings."""
     if isinstance(documents, list):
@@ -40,7 +41,8 @@ def get_embedding(documents, key=None, model="text-embedding-ada-002"):
         texts[i : i + MAX_BATCH_SIZE] for i in range(0, len(texts), MAX_BATCH_SIZE)
     ]
     embeddings = []
-    for batch in batches:
+    for i, batch in enumerate(batches):
+        logging.info(f'Creating embeddings for batch number {i+1}')
         response = openai.Embedding.create(input=batch, model=model)
         embeddings.extend(np.array(item["embedding"]) for item in response["data"])
     return embeddings
@@ -61,6 +63,10 @@ class HyperDB:
         self.embedding_function = embedding_function or (
             lambda docs: get_embedding(docs, key=key)
         )
+        dummy_vector = self.embedding_function(["dummy"])
+        vector_length = len(dummy_vector[0])
+        self.vectors = np.empty((10000, vector_length), dtype=np.float32)  # adjust size as needed
+        self.current_index = 0
         if vectors is not None:
             self.vectors = vectors
             self.documents = documents
@@ -82,6 +88,7 @@ class HyperDB:
                 "Similarity metric not supported. Please use either 'dot', 'cosine', 'euclidean', 'adams', or 'derrida'."
             )
 
+
     def dict(self, vectors=False):
         if vectors:
             return [
@@ -100,17 +107,20 @@ class HyperDB:
             return self.add_document(documents, vectors)
         self.add_documents(documents, vectors)
 
-    def add_document(self, document: dict, vector=None):
+    def add_document(self, document, vector=None):
         vector = (
-            vector if vector is not None else self.embedding_function([document])[0]
+            vector if vector is not None else self.embedding_function(document)
         )
-        if self.vectors is None:
-            self.vectors = np.empty((0, len(vector)), dtype=np.float32)
-        elif len(vector) != self.vectors.shape[1]:
-            raise ValueError("All vectors must have the same length.")
-        self.vectors = np.vstack([self.vectors, vector]).astype(np.float32)
+        if self.current_index >= len(self.vectors):
+            self.vectors = np.vstack([self.vectors, np.empty((10000, len(vector)), dtype=np.float32)])  # adjust size as needed
+        self.vectors[self.current_index] = vector
+        self.current_index += 1
         self.documents.append(document)
+        logging.info('Finished adding documents')
 
+    def finalize(self): 
+        self.vectors = self.vectors[:self.current_index]
+        
     def remove_document(self, index):
         self.vectors = np.delete(self.vectors, index, axis=0)
         self.documents.pop(index)
@@ -153,3 +163,4 @@ class HyperDB:
                 zip([self.documents[index] for index in ranked_results], similarities)
             )
         return [self.documents[index] for index in ranked_results]
+
