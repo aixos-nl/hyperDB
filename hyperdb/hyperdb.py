@@ -116,7 +116,6 @@ class HyperDB:
         self.vectors[self.current_index] = vector
         self.current_index += 1
         self.documents.append(document)
-        logging.info('Finished adding documents')
 
     def finalize(self): 
         self.vectors = self.vectors[:self.current_index]
